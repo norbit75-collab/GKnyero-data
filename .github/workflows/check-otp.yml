@@ -8,33 +8,176 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Repository letöltése
+        uses: actions/checkout@v4
+
       - name: OTP oldal ellenőrzése
         run: |
           python - <<'PY'
+          import json
           import re
           import urllib.request
-          from html.parser import HTMLParser
 
-          url = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
+          OTP_URL = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
+          JSON_FILE = "WinnerData.json"
 
-          print("OTP hivatalos oldal ellenőrzése...")
-          print(url)
+          print("========================================")
+          print("GKnyero - OTP automatikus ellenőrzés")
+          print("========================================")
           print()
 
+          # ----------------------------------------
+          # 1. Meglévő WinnerData.json betöltése
+          # ----------------------------------------
+
+          with open(JSON_FILE, "r", encoding="utf-8") as f:
+              local_data = json.load(f)
+
+          local_draws = local_data.get("draws", [])
+
+          print(f"GitHub adatbázisban lévő sorsolások: {len(local_draws)}")
+          print()
+
+          # ----------------------------------------
+          # 2. OTP oldal letöltése
+          # ----------------------------------------
+
           request = urllib.request.Request(
-              url,
+              OTP_URL,
               headers={
                   "User-Agent": "Mozilla/5.0"
               }
           )
 
           with urllib.request.urlopen(request, timeout=30) as response:
-              html = response.read().decode("utf-8", errors="ignore")
+              html = response.read().decode(
+                  "utf-8",
+                  errors="ignore"
+              )
+
+          print("OTP oldal sikeresen letöltve.")
+          print()
+
+          # ----------------------------------------
+          # 3. HTML -> szöveg
+          # ----------------------------------------
+
+          from html.parser import HTMLParser
 
           class TextParser(HTMLParser):
+
               def __init__(self):
                   super().__init__()
                   self.text = []
+
+              def handle_data(self, data):
+                  data = data.strip()
+
+                  if data:
+                      self.text.append(data)
+
+          parser = TextParser()
+          parser.feed(html)
+
+          text = "\n".join(parser.text)
+
+          # ----------------------------------------
+          # 4. Legfrissebb sorsolás keresése
+          # ----------------------------------------
+
+          draw_matches = re.findall(
+              r"(\d+)\.\s*sorsolás",
+              text,
+              re.IGNORECASE
+          )
+
+          if not draw_matches:
+              raise Exception(
+                  "Nem sikerült megtalálni a sorsolás számát az OTP oldalon."
+              )
+
+          draw_number = int(draw_matches[-1])
+
+          print(f"OTP legfrissebb sorsolása: {draw_number}.")
+          print()
+
+          # ----------------------------------------
+          # 5. Nyertes számok keresése
+          # ----------------------------------------
+
+          numbers = re.findall(
+              r"\b(\d{2})\s+(\d{7})\b",
+              text
+          )
+
+          numbers = [
+              prefix + number
+              for prefix, number in numbers
+          ]
+
+          # Duplikációk eltávolítása
+          numbers = list(dict.fromkeys(numbers))
+
+          if len(numbers) < 6:
+              raise Exception(
+                  f"Csak {len(numbers)} számot találtunk. "
+                  "Nem módosítjuk az adatbázist."
+              )
+
+          # Csak az első 6 számot használjuk
+          numbers = numbers[:6]
+
+          print("OTP által talált nyertes számok:")
+          print()
+
+          for number in numbers:
+              print(f"  {number}")
+
+          print()
+          print(f"Talált számok: {len(numbers)}")
+          print()
+
+          # ----------------------------------------
+          # 6. Ellenőrzés a meglévő adatbázissal
+          # ----------------------------------------
+
+          existing_numbers = set()
+
+          for draw in local_draws:
+              for number in draw.get("numbers", []):
+                  existing_numbers.add(number)
+
+          new_numbers = [
+              number
+              for number in numbers
+              if number not in existing_numbers
+          ]
+
+          print("========================================")
+          print("EREDMÉNY")
+          print("========================================")
+
+          if not new_numbers:
+              print("Nincs új nyertes szám.")
+              print("A WinnerData.json változatlan marad.")
+
+          else:
+              print("ÚJ NYERTES SZÁMOK TALÁLHATÓK!")
+              print()
+
+              for number in new_numbers:
+                  print(f"  + {number}")
+
+              print()
+              print(
+                  "A WinnerData.json ebben a tesztben "
+                  "MÉG NEM VÁLTOZIK."
+              )
+
+          print()
+          print("TESZT BEFEJEZVE")
+          print("========================================")
+          PY                  self.text = []
 
               def handle_data(self, data):
                   if data.strip():
