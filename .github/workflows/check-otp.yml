@@ -1,4 +1,4 @@
-name: OTP adatbázis automatikus frissítés
+name: OTP adatbazis automatikus frissites
 
 on:
   schedule:
@@ -15,35 +15,44 @@ jobs:
 
     steps:
 
-      - name: Repository letöltése
+      - name: Repository letoltese
         uses: actions/checkout@v4
 
-      - name: OTP oldal letöltése
+      - name: Python csomag telepitese
         run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pypdf
 
+      - name: OTP adatbazis frissitese
+        run: |
           python3 <<'PY'
           import json
           import re
           import urllib.request
-          from html.parser import HTMLParser
-          from datetime import datetime
+          from pypdf import PdfReader
 
           OTP_URL = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
           JSON_FILE = "WinnerData.json"
+          PDF_FILE = "latest_otp.pdf"
 
           print("========================================")
-          print("GKnyero - OTP automatikus frissítés")
+          print("GKnyero - OTP automatikus frissites")
           print("========================================")
           print()
 
-          # ----------------------------------------
-          # WinnerData.json betöltése
-          # ----------------------------------------
+          # --------------------------------------------------
+          # 1. WinnerData.json betoltese
+          # --------------------------------------------------
 
           with open(JSON_FILE, "r", encoding="utf-8") as f:
               database = json.load(f)
 
           draws = database.get("draws", [])
+
+          existing_draw_dates = {
+              draw.get("drawDate")
+              for draw in draws
+          }
 
           existing_numbers = set()
 
@@ -51,13 +60,13 @@ jobs:
               for number in draw.get("numbers", []):
                   existing_numbers.add(number)
 
-          print("Meglévő sorsolások:", len(draws))
-          print("Meglévő számok:", len(existing_numbers))
+          print("Meglevo sorsolasok:", len(draws))
+          print("Meglevo nyertes szamok:", len(existing_numbers))
           print()
 
-          # ----------------------------------------
-          # OTP oldal letöltése
-          # ----------------------------------------
+          # --------------------------------------------------
+          # 2. OTP oldal letoltese
+          # --------------------------------------------------
 
           request = urllib.request.Request(
               OTP_URL,
@@ -76,82 +85,187 @@ jobs:
                   errors="ignore"
               )
 
-          print("OTP oldal sikeresen letöltve.")
+          print("OTP oldal sikeresen letoltve.")
           print()
 
-          # ----------------------------------------
-          # HTML szöveggé alakítása
-          # ----------------------------------------
+          # --------------------------------------------------
+          # 3. OTP PDF linkek megkeresese
+          # --------------------------------------------------
 
-          class TextParser(HTMLParser):
-
-              def __init__(self):
-                  super().__init__()
-                  self.text = []
-
-              def handle_data(self, data):
-
-                  data = data.strip()
-
-                  if data:
-                      self.text.append(data)
-
-          parser = TextParser()
-          parser.feed(html)
-
-          text = "\n".join(parser.text)
-
-          # ----------------------------------------
-          # Legfrissebb sorsolás megkeresése
-          # ----------------------------------------
-
-          draw_matches = re.findall(
-              r"(\d+)\.\s*sorsolás",
-              text,
+          pdf_links = re.findall(
+              r'href=["\']([^"\']*GK_[0-9]{8}\.pdf)["\']',
+              html,
               re.IGNORECASE
           )
 
-          if not draw_matches:
-
+          if not pdf_links:
               raise Exception(
-                  "Nem található sorsolási szám az OTP oldalon."
+                  "Nem talaltam OTP sorsolasi PDF-et."
               )
 
-          draw_number = int(draw_matches[0])
+          # Relativ linkekbol teljes URL
+          normalized_links = []
+
+          for link in pdf_links:
+
+              if link.startswith("http"):
+                  full_url = link
+              else:
+                  full_url = (
+                      "https://www.otpbank.hu"
+                      + (
+                          link
+                          if link.startswith("/")
+                          else "/" + link
+                      )
+                  )
+
+              normalized_links.append(full_url)
+
+          # Duplicalt linkek kiszedese
+          normalized_links = list(
+              dict.fromkeys(normalized_links)
+          )
+
+          # A legfrissebb PDF datuma
+          def pdf_date(url):
+
+              match = re.search(
+                  r"GK_(\d{8})\.pdf",
+                  url,
+                  re.IGNORECASE
+              )
+
+              if not match:
+                  return "00000000"
+
+              return match.group(1)
+
+          normalized_links.sort(
+              key=pdf_date,
+              reverse=True
+          )
+
+          latest_pdf_url = normalized_links[0]
 
           print(
-              "Legfrissebb OTP sorsolás:",
+              "Legfrissebb OTP PDF:",
+              latest_pdf_url
+          )
+
+          print()
+
+          # --------------------------------------------------
+          # 4. PDF letoltese
+          # --------------------------------------------------
+
+          pdf_request = urllib.request.Request(
+              latest_pdf_url,
+              headers={
+                  "User-Agent": "Mozilla/5.0"
+              }
+          )
+
+          with urllib.request.urlopen(
+              pdf_request,
+              timeout=30
+          ) as response:
+
+              pdf_data = response.read()
+
+          with open(PDF_FILE, "wb") as f:
+              f.write(pdf_data)
+
+          print("PDF letoltve.")
+          print()
+
+          # --------------------------------------------------
+          # 5. PDF szovegenek kiolvasasa
+          # --------------------------------------------------
+
+          reader = PdfReader(PDF_FILE)
+
+          pdf_text = ""
+
+          for page in reader.pages:
+
+              page_text = page.extract_text()
+
+              if page_text:
+                  pdf_text += "\n" + page_text
+
+          # --------------------------------------------------
+          # 6. Sorsolas datumának kinyerese
+          # --------------------------------------------------
+
+          date_match = re.search(
+              r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.\s*"
+              r"(?:megtartott|megtartottan)",
+              pdf_text,
+              re.IGNORECASE
+          )
+
+          if not date_match:
+
+              date_match = re.search(
+                  r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.",
+                  pdf_text
+              )
+
+          if not date_match:
+
+              raise Exception(
+                  "Nem sikerult kinyerni a sorsolas datumat a PDF-bol."
+              )
+
+          year = date_match.group(1)
+          month = int(date_match.group(2))
+          day = int(date_match.group(3))
+
+          draw_date = (
+              f"{year}-{month:02d}-{day:02d}"
+          )
+
+          print(
+              "Sorsolas datuma:",
+              draw_date
+          )
+
+          # --------------------------------------------------
+          # 7. Sorsolas szamanak kinyerese
+          # --------------------------------------------------
+
+          draw_number_match = re.search(
+              r"(?:jegyzek|sorsolas)\s+(\d{3})\.",
+              pdf_text,
+              re.IGNORECASE
+          )
+
+          if not draw_number_match:
+
+              draw_number_match = re.search(
+                  r"(\d{3})\.",
+                  pdf_text
+              )
+
+          draw_number = (
+              draw_number_match.group(1)
+              if draw_number_match
+              else "?"
+          )
+
+          print(
+              "Sorsolas szama:",
               draw_number
           )
 
-          # ----------------------------------------
-          # A legfrissebb sorsolás környékének kivágása
-          # ----------------------------------------
-
-          match = re.search(
-              r"\d+\.\s*sorsolás",
-              text,
-              re.IGNORECASE
-          )
-
-          if not match:
-
-              raise Exception(
-                  "Nem található a legfrissebb sorsolás."
-              )
-
-          section = text[
-              match.start():
-              match.start() + 3000
-          ]
-
-          # ----------------------------------------
-          # Nyertes számok keresése
-          # ----------------------------------------
+          # --------------------------------------------------
+          # 8. Nyertes betetkonyvszamok keresese
+          # --------------------------------------------------
 
           matches = re.findall(
               r"\b(\d{2})\s+(\d{7})\b",
-              section
+              pdf_text
           )
 
           numbers = []
@@ -164,60 +278,42 @@ jobs:
 
                   numbers.append(full_number)
 
-          # Az aktuális normál sorsolásnál
-          # pontosan 6 nyertes számot várunk.
+          # Egy normal sorsolasnal 6 szamot varunk.
+          # Ha nem 6, NEM irjuk at az adatbazist.
 
           if len(numbers) < 6:
 
               raise Exception(
-                  "Nem sikerült 6 nyertes számot találni."
+                  "Nem talaltam legalabb 6 nyertes betetkonyvet. "
+                  f"Talalt: {len(numbers)}"
               )
 
           numbers = numbers[:6]
 
           print()
-          print("Talált nyertes számok:")
+          print("Nyertes szamok:")
 
           for number in numbers:
               print("  ", number)
 
           print()
 
-          # ----------------------------------------
-          # Új számok ellenőrzése
-          # ----------------------------------------
+          # --------------------------------------------------
+          # 9. Ellenorzes: mar szerepel-e?
+          # --------------------------------------------------
 
-          new_numbers = [
-              number
-              for number in numbers
-              if number not in existing_numbers
-          ]
-
-          if not new_numbers:
+          if draw_date in existing_draw_dates:
 
               print(
-                  "Ez a sorsolás már szerepel "
-                  "az adatbázisban."
+                  "Ez a sorsolas mar szerepel az adatbazisban."
               )
 
-              print("Nincs módosítás.")
+              print("Nincs modositas.")
 
           else:
 
-              print("ÚJ SORSOLÁS TALÁLHATÓ!")
-
-              for number in new_numbers:
-                  print("  +", number)
-
-              # ------------------------------------
-              # Dátum
-              #
-              # A jelenlegi automata első körben
-              # az aktuális dátumot használja.
-              # ------------------------------------
-
-              draw_date = datetime.now().strftime(
-                  "%Y-%m-%d"
+              print(
+                  "UJ SORSOLAS TALALHATO!"
               )
 
               new_draw = {
@@ -227,15 +323,21 @@ jobs:
 
               draws.append(new_draw)
 
-              # Verzió frissítése
-
-              database["version"] = draw_date[:7]
+              # Datum szerinti rendezes
+              draws.sort(
+                  key=lambda item: item.get(
+                      "drawDate",
+                      ""
+                  )
+              )
 
               database["draws"] = draws
 
-              # ------------------------------------
-              # JSON mentése
-              # ------------------------------------
+              database["version"] = draw_date[:7]
+
+              # ------------------------------------------------
+              # 10. JSON mentese
+              # ------------------------------------------------
 
               with open(
                   JSON_FILE,
@@ -252,7 +354,7 @@ jobs:
 
               print()
               print(
-                  "WinnerData.json frissítve."
+                  "WinnerData.json frissitve."
               )
 
           print()
@@ -261,17 +363,17 @@ jobs:
           print("========================================")
           PY
 
-      - name: Változások ellenőrzése
+      - name: Valtozasok ellenorzese
         run: |
           git status --short
 
-      - name: Adatbázis commit és push
+      - name: Adatbazis commit es push
         run: |
 
           if git diff --quiet WinnerData.json; then
 
-            echo "Nincs új adat."
-            echo "Nem készül commit."
+            echo "Nincs uj sorsolas."
+            echo "Nem keszul commit."
 
           else
 
@@ -280,7 +382,7 @@ jobs:
 
             git add WinnerData.json
 
-            git commit -m "Automatikus OTP adatbázis frissítés"
+            git commit -m "Automatikus OTP adatbazis frissites"
 
             git push
 
