@@ -1,4 +1,4 @@
-name: OTP adatbázis ellenőrzés
+name: OTP adatbazis ellenorzes
 
 on:
   workflow_dispatch:
@@ -8,245 +8,69 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository letöltése
+      - name: Repository letoltese
         uses: actions/checkout@v4
 
-      - name: OTP oldal ellenőrzése
+      - name: OTP oldal ellenorzese
         run: |
-          python - <<'PY'
-          import json
+          python3 <<'PY'
           import re
           import urllib.request
 
-          OTP_URL = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
-          JSON_FILE = "WinnerData.json"
+          url = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
 
           print("========================================")
-          print("GKnyero - OTP automatikus ellenőrzés")
+          print("GKnyero - OTP automatikus ellenorzes")
           print("========================================")
-          print()
-
-          # ----------------------------------------
-          # 1. Meglévő WinnerData.json betöltése
-          # ----------------------------------------
-
-          with open(JSON_FILE, "r", encoding="utf-8") as f:
-              local_data = json.load(f)
-
-          local_draws = local_data.get("draws", [])
-
-          print(f"GitHub adatbázisban lévő sorsolások: {len(local_draws)}")
-          print()
-
-          # ----------------------------------------
-          # 2. OTP oldal letöltése
-          # ----------------------------------------
 
           request = urllib.request.Request(
-              OTP_URL,
-              headers={
-                  "User-Agent": "Mozilla/5.0"
-              }
+              url,
+              headers={"User-Agent": "Mozilla/5.0"}
           )
 
           with urllib.request.urlopen(request, timeout=30) as response:
-              html = response.read().decode(
-                  "utf-8",
-                  errors="ignore"
-              )
+              html = response.read().decode("utf-8", errors="ignore")
 
-          print("OTP oldal sikeresen letöltve.")
+          print()
+          print("OTP oldal sikeresen letoltve.")
           print()
 
-          # ----------------------------------------
-          # 3. HTML -> szöveg
-          # ----------------------------------------
-
-          from html.parser import HTMLParser
-
-          class TextParser(HTMLParser):
-
-              def __init__(self):
-                  super().__init__()
-                  self.text = []
-
-              def handle_data(self, data):
-                  data = data.strip()
-
-                  if data:
-                      self.text.append(data)
-
-          parser = TextParser()
-          parser.feed(html)
-
-          text = "\n".join(parser.text)
-
-          # ----------------------------------------
-          # 4. Legfrissebb sorsolás keresése
-          # ----------------------------------------
-
-          draw_matches = re.findall(
-              r"(\d+)\.\s*sorsolás",
-              text,
+          draws = re.findall(
+              r"(\d+)\.\s*sorsolas",
+              html,
               re.IGNORECASE
           )
 
-          if not draw_matches:
-              raise Exception(
-                  "Nem sikerült megtalálni a sorsolás számát az OTP oldalon."
-              )
-
-          draw_number = int(draw_matches[-1])
-
-          print(f"OTP legfrissebb sorsolása: {draw_number}.")
+          print("Talalt sorsolasok:", draws)
           print()
-
-          # ----------------------------------------
-          # 5. Nyertes számok keresése
-          # ----------------------------------------
 
           numbers = re.findall(
               r"\b(\d{2})\s+(\d{7})\b",
-              text
+              html
           )
 
-          numbers = [
-              prefix + number
-              for prefix, number in numbers
-          ]
-
-          # Duplikációk eltávolítása
-          numbers = list(dict.fromkeys(numbers))
-
-          if len(numbers) < 6:
-              raise Exception(
-                  f"Csak {len(numbers)} számot találtunk. "
-                  "Nem módosítjuk az adatbázist."
+          numbers = list(
+              dict.fromkeys(
+                  prefix + number
+                  for prefix, number in numbers
               )
+          )
 
-          # Csak az első 6 számot használjuk
           numbers = numbers[:6]
 
-          print("OTP által talált nyertes számok:")
+          print("OTP altal talalt nyertes szamok:")
           print()
 
           for number in numbers:
-              print(f"  {number}")
+              print("  " + number)
 
           print()
-          print(f"Talált számok: {len(numbers)}")
+          print("Talalt szamok szama:", len(numbers))
           print()
-
-          # ----------------------------------------
-          # 6. Ellenőrzés a meglévő adatbázissal
-          # ----------------------------------------
-
-          existing_numbers = set()
-
-          for draw in local_draws:
-              for number in draw.get("numbers", []):
-                  existing_numbers.add(number)
-
-          new_numbers = [
-              number
-              for number in numbers
-              if number not in existing_numbers
-          ]
 
           print("========================================")
-          print("EREDMÉNY")
-          print("========================================")
-
-          if not new_numbers:
-              print("Nincs új nyertes szám.")
-              print("A WinnerData.json változatlan marad.")
-
-          else:
-              print("ÚJ NYERTES SZÁMOK TALÁLHATÓK!")
-              print()
-
-              for number in new_numbers:
-                  print(f"  + {number}")
-
-              print()
-              print(
-                  "A WinnerData.json ebben a tesztben "
-                  "MÉG NEM VÁLTOZIK."
-              )
-
-          print()
           print("TESZT BEFEJEZVE")
           print("========================================")
-          PY                  self.text = []
-
-              def handle_data(self, data):
-                  if data.strip():
-                      self.text.append(data.strip())
-
-          parser = TextParser()
-          parser.feed(html)
-
-          text = "\n".join(parser.text)
-
-          start_marker = "Sorsolási eredmények"
-
-          if start_marker not in text:
-              raise Exception(
-                  "Nem található az OTP oldalon a sorsolási eredmények része."
-              )
-
-          section = text.split(
-              start_marker,
-              1
-          )[1]
-
-          end_marker = "Milyen típusú nyereménybetétet nyithat?"
-
-          if end_marker in section:
-              section = section.split(
-                  end_marker,
-                  1
-              )[0]
-
-          draw_match = re.search(
-              r"(\d+)\.\s*sorsolás",
-              section
-          )
-
-          if not draw_match:
-              raise Exception(
-                  "Nem sikerült megtalálni a sorsolás számát."
-              )
-
-          draw_number = draw_match.group(1)
-
-          numbers = re.findall(
-              r"\b\d{2}\s\d{7}\b",
-              section
-          )
-
-          # Duplikációk eltávolítása,
-          # az eredeti sorrend megtartásával.
-          numbers = list(
-              dict.fromkeys(numbers)
-          )
-
+          print("A WinnerData.json meg NEM valtozott.")
           print("========================================")
-          print("OTP SORSOLÁSI EREDMÉNY")
-          print("========================================")
-          print(f"Sorsolás: {draw_number}.")
-          print()
-          print("Talált betétkönyvek:")
-
-          for number in numbers:
-              clean_number = number.replace(" ", "")
-              print(
-                  f"  {number}  ->  {clean_number}"
-              )
-
-          print()
-          print(f"Talált számok száma: {len(numbers)}")
-          print("========================================")
-          print()
-          print("TESZT SIKERES - AZ ADATBÁZIS MÉG NEM VÁLTOZOTT!")
           PY
