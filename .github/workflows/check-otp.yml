@@ -1,76 +1,287 @@
-name: OTP adatbazis ellenorzes
+name: OTP adatbázis automatikus frissítés
 
 on:
+  schedule:
+    - cron: "0 6 * * *"
+
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  check-otp:
+  update-database:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository letoltese
+
+      - name: Repository letöltése
         uses: actions/checkout@v4
 
-      - name: OTP oldal ellenorzese
+      - name: OTP oldal letöltése
         run: |
+
           python3 <<'PY'
+          import json
           import re
           import urllib.request
+          from html.parser import HTMLParser
+          from datetime import datetime
 
-          url = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
+          OTP_URL = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
+          JSON_FILE = "WinnerData.json"
 
           print("========================================")
-          print("GKnyero - OTP automatikus ellenorzes")
+          print("GKnyero - OTP automatikus frissítés")
           print("========================================")
+          print()
+
+          # ----------------------------------------
+          # WinnerData.json betöltése
+          # ----------------------------------------
+
+          with open(JSON_FILE, "r", encoding="utf-8") as f:
+              database = json.load(f)
+
+          draws = database.get("draws", [])
+
+          existing_numbers = set()
+
+          for draw in draws:
+              for number in draw.get("numbers", []):
+                  existing_numbers.add(number)
+
+          print("Meglévő sorsolások:", len(draws))
+          print("Meglévő számok:", len(existing_numbers))
+          print()
+
+          # ----------------------------------------
+          # OTP oldal letöltése
+          # ----------------------------------------
 
           request = urllib.request.Request(
-              url,
-              headers={"User-Agent": "Mozilla/5.0"}
+              OTP_URL,
+              headers={
+                  "User-Agent": "Mozilla/5.0"
+              }
           )
 
-          with urllib.request.urlopen(request, timeout=30) as response:
-              html = response.read().decode("utf-8", errors="ignore")
+          with urllib.request.urlopen(
+              request,
+              timeout=30
+          ) as response:
 
-          print()
-          print("OTP oldal sikeresen letoltve.")
+              html = response.read().decode(
+                  "utf-8",
+                  errors="ignore"
+              )
+
+          print("OTP oldal sikeresen letöltve.")
           print()
 
-          draws = re.findall(
-              r"(\d+)\.\s*sorsolas",
-              html,
+          # ----------------------------------------
+          # HTML szöveggé alakítása
+          # ----------------------------------------
+
+          class TextParser(HTMLParser):
+
+              def __init__(self):
+                  super().__init__()
+                  self.text = []
+
+              def handle_data(self, data):
+
+                  data = data.strip()
+
+                  if data:
+                      self.text.append(data)
+
+          parser = TextParser()
+          parser.feed(html)
+
+          text = "\n".join(parser.text)
+
+          # ----------------------------------------
+          # Legfrissebb sorsolás megkeresése
+          # ----------------------------------------
+
+          draw_matches = re.findall(
+              r"(\d+)\.\s*sorsolás",
+              text,
               re.IGNORECASE
           )
 
-          print("Talalt sorsolasok:", draws)
-          print()
+          if not draw_matches:
 
-          numbers = re.findall(
-              r"\b(\d{2})\s+(\d{7})\b",
-              html
-          )
-
-          numbers = list(
-              dict.fromkeys(
-                  prefix + number
-                  for prefix, number in numbers
+              raise Exception(
+                  "Nem található sorsolási szám az OTP oldalon."
               )
+
+          draw_number = int(draw_matches[0])
+
+          print(
+              "Legfrissebb OTP sorsolás:",
+              draw_number
           )
+
+          # ----------------------------------------
+          # A legfrissebb sorsolás környékének kivágása
+          # ----------------------------------------
+
+          match = re.search(
+              r"\d+\.\s*sorsolás",
+              text,
+              re.IGNORECASE
+          )
+
+          if not match:
+
+              raise Exception(
+                  "Nem található a legfrissebb sorsolás."
+              )
+
+          section = text[
+              match.start():
+              match.start() + 3000
+          ]
+
+          # ----------------------------------------
+          # Nyertes számok keresése
+          # ----------------------------------------
+
+          matches = re.findall(
+              r"\b(\d{2})\s+(\d{7})\b",
+              section
+          )
+
+          numbers = []
+
+          for prefix, number in matches:
+
+              full_number = prefix + number
+
+              if full_number not in numbers:
+
+                  numbers.append(full_number)
+
+          # Az aktuális normál sorsolásnál
+          # pontosan 6 nyertes számot várunk.
+
+          if len(numbers) < 6:
+
+              raise Exception(
+                  "Nem sikerült 6 nyertes számot találni."
+              )
 
           numbers = numbers[:6]
 
-          print("OTP altal talalt nyertes szamok:")
           print()
+          print("Talált nyertes számok:")
 
           for number in numbers:
-              print("  " + number)
+              print("  ", number)
 
           print()
-          print("Talalt szamok szama:", len(numbers))
-          print()
 
+          # ----------------------------------------
+          # Új számok ellenőrzése
+          # ----------------------------------------
+
+          new_numbers = [
+              number
+              for number in numbers
+              if number not in existing_numbers
+          ]
+
+          if not new_numbers:
+
+              print(
+                  "Ez a sorsolás már szerepel "
+                  "az adatbázisban."
+              )
+
+              print("Nincs módosítás.")
+
+          else:
+
+              print("ÚJ SORSOLÁS TALÁLHATÓ!")
+
+              for number in new_numbers:
+                  print("  +", number)
+
+              # ------------------------------------
+              # Dátum
+              #
+              # A jelenlegi automata első körben
+              # az aktuális dátumot használja.
+              # ------------------------------------
+
+              draw_date = datetime.now().strftime(
+                  "%Y-%m-%d"
+              )
+
+              new_draw = {
+                  "drawDate": draw_date,
+                  "numbers": numbers
+              }
+
+              draws.append(new_draw)
+
+              # Verzió frissítése
+
+              database["version"] = draw_date[:7]
+
+              database["draws"] = draws
+
+              # ------------------------------------
+              # JSON mentése
+              # ------------------------------------
+
+              with open(
+                  JSON_FILE,
+                  "w",
+                  encoding="utf-8"
+              ) as f:
+
+                  json.dump(
+                      database,
+                      f,
+                      ensure_ascii=False,
+                      indent=2
+                  )
+
+              print()
+              print(
+                  "WinnerData.json frissítve."
+              )
+
+          print()
           print("========================================")
-          print("TESZT BEFEJEZVE")
-          print("========================================")
-          print("A WinnerData.json meg NEM valtozott.")
+          print("FOLYAMAT BEFEJEZVE")
           print("========================================")
           PY
+
+      - name: Változások ellenőrzése
+        run: |
+          git status --short
+
+      - name: Adatbázis commit és push
+        run: |
+
+          if git diff --quiet WinnerData.json; then
+
+            echo "Nincs új adat."
+            echo "Nem készül commit."
+
+          else
+
+            git config user.name "GKnyero Bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            git add WinnerData.json
+
+            git commit -m "Automatikus OTP adatbázis frissítés"
+
+            git push
+
+          fi
