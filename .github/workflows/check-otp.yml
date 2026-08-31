@@ -33,16 +33,15 @@ jobs:
 
           OTP_URL = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
           JSON_FILE = "WinnerData.json"
-          PDF_FILE = "latest_otp.pdf"
 
           print("========================================")
           print("GKnyero - OTP automatikus frissites")
           print("========================================")
           print()
 
-          # ----------------------------------------
+          # ========================================
           # WinnerData.json betoltese
-          # ----------------------------------------
+          # ========================================
 
           with open(JSON_FILE, "r", encoding="utf-8") as f:
               database = json.load(f)
@@ -64,9 +63,9 @@ jobs:
           print("Meglevo nyertes szamok:", len(existing_numbers))
           print()
 
-          # ----------------------------------------
+          # ========================================
           # OTP oldal letoltese
-          # ----------------------------------------
+          # ========================================
 
           request = urllib.request.Request(
               OTP_URL,
@@ -88,19 +87,19 @@ jobs:
           print("OTP oldal sikeresen letoltve.")
           print()
 
-          # ----------------------------------------
-          # OTP PDF linkek keresese
-          # ----------------------------------------
+          # ========================================
+          # NORMAL + EXTRA PDF linkek keresese
+          # ========================================
 
           pdf_links = re.findall(
-              r'href=["\']([^"\']*GK_[0-9]{8}\.pdf)["\']',
+              r'href=["\']([^"\']*GK_[0-9]{8}(?:_extra)?\.pdf)["\']',
               html,
               re.IGNORECASE
           )
 
           if not pdf_links:
               raise Exception(
-                  "Nem talaltam OTP sorsolasi PDF-et."
+                  "Nem talaltam OTP sorsolasi PDF-eket."
               )
 
           normalized_links = []
@@ -122,175 +121,337 @@ jobs:
               if full_url not in normalized_links:
                   normalized_links.append(full_url)
 
-          # ----------------------------------------
-          # Legfrissebb PDF kivalasztasa
-          # ----------------------------------------
+          # ========================================
+          # PDF-ek rendezese datum szerint
+          # ========================================
 
-          def get_pdf_date(url):
+          def get_pdf_sort_key(url):
 
               match = re.search(
-                  r"GK_(\d{8})\.pdf",
+                  r"GK_(\d{8})(?:_extra)?\.pdf",
                   url,
                   re.IGNORECASE
               )
 
-              if match:
-                  return match.group(1)
+              if not match:
+                  return "00000000"
 
-              return "00000000"
+              return match.group(1)
 
           normalized_links.sort(
-              key=get_pdf_date,
-              reverse=True
+              key=get_pdf_sort_key
           )
 
-          latest_pdf_url = normalized_links[0]
-
-          pdf_date_match = re.search(
-              r"GK_(\d{4})(\d{2})(\d{2})\.pdf",
-              latest_pdf_url,
-              re.IGNORECASE
+          print(
+              "Talalt OTP PDF-ek:",
+              len(normalized_links)
           )
-
-          if not pdf_date_match:
-              raise Exception(
-                  "Nem sikerult a datumot kinyerni a PDF nevéből."
-              )
-
-          year = pdf_date_match.group(1)
-          month = pdf_date_match.group(2)
-          day = pdf_date_match.group(3)
-
-          draw_date = f"{year}-{month}-{day}"
-
-          print("Legfrissebb OTP PDF:")
-          print(latest_pdf_url)
           print()
 
-          print("Sorsolas datuma:", draw_date)
-          print()
+          # ========================================
+          # MINDEN PDF ellenorzese
+          # ========================================
 
-          # ----------------------------------------
-          # PDF letoltese
-          # ----------------------------------------
+          new_draws = 0
 
-          pdf_request = urllib.request.Request(
-              latest_pdf_url,
-              headers={
-                  "User-Agent": "Mozilla/5.0"
-              }
-          )
+          for pdf_url in normalized_links:
 
-          with urllib.request.urlopen(
-              pdf_request,
-              timeout=30
-          ) as response:
-
-              pdf_data = response.read()
-
-          with open(PDF_FILE, "wb") as f:
-              f.write(pdf_data)
-
-          print("PDF letoltve.")
-          print()
-
-          # ----------------------------------------
-          # PDF olvasasa
-          # ----------------------------------------
-
-          reader = PdfReader(PDF_FILE)
-
-          pdf_text = ""
-
-          for page in reader.pages:
-
-              page_text = page.extract_text()
-
-              if page_text:
-                  pdf_text += "\n" + page_text
-
-          # ----------------------------------------
-          # Nyertes szamok keresese
-          # ----------------------------------------
-
-          matches = re.findall(
-              r"\b(\d{2})\s+(\d{7})\b",
-              pdf_text
-          )
-
-          numbers = []
-
-          for prefix, number in matches:
-
-              full_number = prefix + number
-
-              if full_number not in numbers:
-                  numbers.append(full_number)
-
-          # ----------------------------------------
-          # Ellenorzes
-          # ----------------------------------------
-
-          print("PDF-ben talalt szamok:")
-          print()
-
-          for number in numbers:
-              print("  ", number)
-
-          print()
-
-          if len(numbers) < 6:
-
-              raise Exception(
-                  "Nem talaltam legalabb 6 nyertes szamot. "
-                  f"Talalt: {len(numbers)}"
-              )
-
-          numbers = numbers[:6]
-
-          print("Felhasznalt nyertes szamok:")
-          print()
-
-          for number in numbers:
-              print("  ", number)
-
-          print()
-
-          # ----------------------------------------
-          # Mar szerepel-e?
-          # ----------------------------------------
-
-          if draw_date in existing_dates:
-
-              print("Ez a sorsolas mar szerepel.")
-              print("Nincs adatbazis-modositas.")
-
-          else:
-
-              print("UJ SORSOLAS TALALHATO!")
+              print("----------------------------------------")
+              print("PDF ellenorzese:")
+              print(pdf_url)
               print()
+
+              # ------------------------------------
+              # Datum kinyerese a fajlnevbol
+              # ------------------------------------
+
+              date_match = re.search(
+                  r"GK_(\d{4})(\d{2})(\d{2})(_extra)?\.pdf",
+                  pdf_url,
+                  re.IGNORECASE
+              )
+
+              if not date_match:
+
+                  print(
+                      "Nem sikerult datumot kinyerni."
+                  )
+
+                  continue
+
+              year = date_match.group(1)
+              month = date_match.group(2)
+              day = date_match.group(3)
+              extra = date_match.group(4)
+
+              draw_date = (
+                  f"{year}-{month}-{day}"
+              )
+
+              if extra:
+                  draw_date += " EXTRA"
+
+              print(
+                  "Sorsolas:",
+                  draw_date
+              )
+
+              # ------------------------------------
+              # Ha mar szerepel, nem kell letolteni
+              # ------------------------------------
+
+              if draw_date in existing_dates:
+
+                  print(
+                      "Ez a sorsolas mar szerepel."
+                  )
+
+                  continue
+
+              # ------------------------------------
+              # PDF letoltese
+              # ------------------------------------
+
+              try:
+
+                  pdf_request = urllib.request.Request(
+                      pdf_url,
+                      headers={
+                          "User-Agent": "Mozilla/5.0"
+                      }
+                  )
+
+                  with urllib.request.urlopen(
+                      pdf_request,
+                      timeout=30
+                  ) as response:
+
+                      pdf_data = response.read()
+
+              except Exception as error:
+
+                  print(
+                      "PDF letoltesi hiba:",
+                      error
+                  )
+
+                  continue
+
+              # ------------------------------------
+              # PDF ideiglenes mentese
+              # ------------------------------------
+
+              pdf_file = "latest_otp.pdf"
+
+              with open(
+                  pdf_file,
+                  "wb"
+              ) as f:
+
+                  f.write(pdf_data)
+
+              print(
+                  "PDF sikeresen letoltve."
+              )
+
+              # ------------------------------------
+              # PDF szoveg kiolvasasa
+              # ------------------------------------
+
+              try:
+
+                  reader = PdfReader(
+                      pdf_file
+                  )
+
+                  pdf_text = ""
+
+                  for page in reader.pages:
+
+                      page_text = page.extract_text()
+
+                      if page_text:
+                          pdf_text += "\n" + page_text
+
+              except Exception as error:
+
+                  print(
+                      "PDF olvasasi hiba:",
+                      error
+                  )
+
+                  continue
+
+              # ------------------------------------
+              # Nyertes szamok keresese
+              # ------------------------------------
+
+              matches = re.findall(
+                  r"\b(\d{2})\s+(\d{7})\b",
+                  pdf_text
+              )
+
+              numbers = []
+
+              for prefix, number in matches:
+
+                  full_number = (
+                      prefix + number
+                  )
+
+                  if full_number not in numbers:
+
+                      numbers.append(
+                          full_number
+                      )
+
+              # ------------------------------------
+              # Ellenorzes
+              # ------------------------------------
+
+              print()
+              print(
+                  "PDF-ben talalt szamok:"
+              )
+
+              for number in numbers:
+
+                  print(
+                      "  ",
+                      number
+                  )
+
+              print()
+
+              # ------------------------------------
+              # Normal sorsolas = legalabb 6
+              # Extra = legalabb 1
+              # ------------------------------------
+
+              if extra:
+
+                  if len(numbers) < 1:
+
+                      print(
+                          "Az Extra PDF-ben nem "
+                          "talaltam nyertes szamot."
+                      )
+
+                      continue
+
+              else:
+
+                  if len(numbers) < 6:
+
+                      print(
+                          "A normal PDF-ben nem "
+                          "talaltam 6 nyertes szamot."
+                      )
+
+                      continue
+
+                  numbers = numbers[:6]
+
+              # ------------------------------------
+              # UJ SORSOLAS
+              # ------------------------------------
+
+              print(
+                  "UJ SORSOLAS TALALHATO!"
+              )
+
+              print(
+                  "Datum:",
+                  draw_date
+              )
+
+              print(
+                  "Nyertes szamok:"
+              )
+
+              for number in numbers:
+
+                  print(
+                      "  ",
+                      number
+                  )
 
               new_draw = {
                   "drawDate": draw_date,
                   "numbers": numbers
               }
 
-              draws.append(new_draw)
-
-              # Datum szerint rendezes
-              draws.sort(
-                  key=lambda item: item.get(
-                      "drawDate",
-                      ""
-                  )
+              draws.append(
+                  new_draw
               )
 
-              database["draws"] = draws
-              database["version"] = draw_date[:7]
+              existing_dates.add(
+                  draw_date
+              )
 
-              # ----------------------------------------
-              # JSON mentese
-              # ----------------------------------------
+              new_draws += 1
+
+              print()
+
+          # ========================================
+          # Sorsolasok datum szerinti rendezese
+          # ========================================
+
+          def sort_draws(draw):
+
+              date_text = draw.get(
+                  "drawDate",
+                  ""
+              )
+
+              match = re.match(
+                  r"(\d{4}-\d{2}-\d{2})",
+                  date_text
+              )
+
+              if match:
+                  return match.group(1)
+
+              return date_text
+
+          draws.sort(
+              key=sort_draws
+          )
+
+          database["draws"] = draws
+
+          # ========================================
+          # Version frissitese
+          # ========================================
+
+          if draws:
+
+              latest_draw = max(
+                  draws,
+                  key=sort_draws
+              )
+
+              latest_date = latest_draw.get(
+                  "drawDate",
+                  ""
+              )
+
+              date_match = re.match(
+                  r"(\d{4}-\d{2})",
+                  latest_date
+              )
+
+              if date_match:
+
+                  database["version"] = (
+                      date_match.group(1)
+                  )
+
+          # ========================================
+          # WinnerData.json mentese
+          # ========================================
+
+          if new_draws > 0:
 
               with open(
                   JSON_FILE,
@@ -305,7 +466,26 @@ jobs:
                       indent=2
                   )
 
-              print("WinnerData.json frissitve.")
+              print()
+              print(
+                  "WinnerData.json frissitve."
+              )
+
+              print(
+                  "Uj sorsolasok:",
+                  new_draws
+              )
+
+          else:
+
+              print()
+              print(
+                  "Nem talaltam uj sorsolast."
+              )
+
+              print(
+                  "A WinnerData.json nem valtozott."
+              )
 
           print()
           print("========================================")
