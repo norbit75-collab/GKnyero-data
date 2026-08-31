@@ -8,15 +8,102 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repository letöltése
-        uses: actions/checkout@v4
-
-      - name: Teszt
+      - name: OTP oldal ellenőrzése
         run: |
-          echo "================================"
-          echo "GKnyero OTP adatbázis teszt"
-          echo "================================"
-          echo "GitHub Actions működik!"
-          echo "Repository: $GITHUB_REPOSITORY"
-          echo "Branch: $GITHUB_REF_NAME"
-          echo "================================"
+          python - <<'PY'
+          import re
+          import urllib.request
+          from html.parser import HTMLParser
+
+          url = "https://www.otpbank.hu/portal/hu/megtakaritas/forint-betetek/gepkocsinyeremeny"
+
+          print("OTP hivatalos oldal ellenőrzése...")
+          print(url)
+          print()
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "User-Agent": "Mozilla/5.0"
+              }
+          )
+
+          with urllib.request.urlopen(request, timeout=30) as response:
+              html = response.read().decode("utf-8", errors="ignore")
+
+          class TextParser(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.text = []
+
+              def handle_data(self, data):
+                  if data.strip():
+                      self.text.append(data.strip())
+
+          parser = TextParser()
+          parser.feed(html)
+
+          text = "\n".join(parser.text)
+
+          start_marker = "Sorsolási eredmények"
+
+          if start_marker not in text:
+              raise Exception(
+                  "Nem található az OTP oldalon a sorsolási eredmények része."
+              )
+
+          section = text.split(
+              start_marker,
+              1
+          )[1]
+
+          end_marker = "Milyen típusú nyereménybetétet nyithat?"
+
+          if end_marker in section:
+              section = section.split(
+                  end_marker,
+                  1
+              )[0]
+
+          draw_match = re.search(
+              r"(\d+)\.\s*sorsolás",
+              section
+          )
+
+          if not draw_match:
+              raise Exception(
+                  "Nem sikerült megtalálni a sorsolás számát."
+              )
+
+          draw_number = draw_match.group(1)
+
+          numbers = re.findall(
+              r"\b\d{2}\s\d{7}\b",
+              section
+          )
+
+          # Duplikációk eltávolítása,
+          # az eredeti sorrend megtartásával.
+          numbers = list(
+              dict.fromkeys(numbers)
+          )
+
+          print("========================================")
+          print("OTP SORSOLÁSI EREDMÉNY")
+          print("========================================")
+          print(f"Sorsolás: {draw_number}.")
+          print()
+          print("Talált betétkönyvek:")
+
+          for number in numbers:
+              clean_number = number.replace(" ", "")
+              print(
+                  f"  {number}  ->  {clean_number}"
+              )
+
+          print()
+          print(f"Talált számok száma: {len(numbers)}")
+          print("========================================")
+          print()
+          print("TESZT SIKERES - AZ ADATBÁZIS MÉG NEM VÁLTOZOTT!")
+          PY
